@@ -1,0 +1,57 @@
+[workspace]
+name   = "financeiro"           # nome do workspace
+base   = "~/proj/financeiro"    # raiz; o cwd dos painéis é relativo a ela
+driver = "konsole"              # opcional (default: konsole)
+
+on_timeout = "fail"             # readiness estourou -> aborta (ou "continue")
+
+[env]                           # variáveis herdadas por todos os painéis
+NODE_ENV = "development"
+
+[[tab]]
+title =  "backend"
+cwd   = "server"                # base local da aba (base + "server")
+
+  # Árvore de splits da aba, descrita como nós nomeados e planos.
+  # `root` é a raiz; as folhas (db, api, migrate) são aliases de painel.
+  #
+  #   ┌────────────┬──────────┐
+  #   │            │   api    │
+  #   │     db     ├──────────┤   ->  root: db | right (colunas 60/40)
+  #   │            │ migrate  │      right: api / migrate (linhas)
+  #   └────────────┴──────────┘
+  [tab.split.root]
+  dir   = "columns"             # filhos lado a lado
+  ratio = ["60%", "40%"]        # opcional; iguais se omitido
+  parts = ["db", "right"]       # nome de nó OU alias de painel
+
+  [tab.split.right]
+  dir   = "rows"                # filhos empilhados
+  parts = ["api", "migrate"]
+
+  [[tab.pane]]
+  area       = "db"             # prende este painel à folha "db"
+  run        = "docker compose up"
+  ready_when = { port = 5432, timeout = "60s" }   # "pronto" = porta abriu
+
+  [[tab.pane]]
+  area       = "api"
+  run        = "pnpm start:dev"
+  depends_on = ["db"]                              # espera o db ficar pronto
+  ready_when = { http = "http://localhost:3000/health" }
+
+  [[tab.pane]]
+  area       = "migrate"
+  run        = "pnpm db:migrate"
+  depends_on = ["db"]
+  hold       = true                                # mantém o painel após terminar
+
+[[tab]]
+title = "frontend"
+cwd   = "client"
+# Aba de painel único: sem [tab.split], o painel preenche a aba e dispensa `area`.
+
+  [[tab.pane]]
+  run        = "pnpm dev"
+  depends_on = ["api"]          # dependências podem atravessar abas
+
