@@ -48,3 +48,49 @@ impl<'de> Deserialize<'de> for Weight {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(serde::Deserialize)]
+    struct W {
+        w: Weight,
+    }
+
+    fn parse(s: &str) -> Result<Weight, toml::de::Error> {
+        toml::from_str::<W>(&format!("w = {s}")).map(|w| w.w)
+    }
+
+    #[test]
+    fn valid_percent() {
+        assert!(matches!(parse("\"60%\"").unwrap(), Weight::Percent(60)));
+        assert!(matches!(parse("\"0%\"").unwrap(), Weight::Percent(0)));
+        assert!(matches!(parse("\"100%\"").unwrap(), Weight::Percent(100)));
+    }
+
+    #[test]
+    fn percent_over_100_rejected() {
+        assert!(parse("\"101%\"").is_err());
+    }
+
+    #[test]
+    fn percent_without_suffix_rejected() {
+        assert!(parse("\"60\"").is_err());
+    }
+
+    #[test]
+    fn valid_factor() {
+        assert!(matches!(parse("0.4").unwrap(), Weight::Factor(f) if f == 0.4));
+        assert!(matches!(parse("0.1").unwrap(), Weight::Factor(_)));
+        assert!(matches!(parse("0.999").unwrap(), Weight::Factor(_)));
+    }
+
+    #[test]
+    fn factor_out_of_range_rejected() {
+        assert!(parse("0.0").is_err());
+        assert!(parse("1.0").is_err());
+        assert!(parse("1.5").is_err());
+        assert!(parse("-0.5").is_err());
+    }
+}

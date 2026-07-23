@@ -190,3 +190,260 @@ impl Tab {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::{
+        condition::Condition, ready_when::ReadyWhen, split_axis::SplitAxis, weight::Weight,
+    };
+
+    fn pane(area: &str) -> Pane {
+        Pane {
+            area: Some(area.into()),
+            run: None,
+            depends_on: None,
+            hold: false,
+            ready_when: None,
+        }
+    }
+
+    fn split(dir: SplitAxis, parts: &[&str]) -> SplitNode {
+        SplitNode {
+            dir,
+            ratio: vec![],
+            parts: parts.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    fn tab_with_splits(splits: HashMap<String, SplitNode>, panes: Vec<Pane>) -> Tab {
+        Tab {
+            title: "test".into(),
+            cwd: PathBuf::new(),
+            panes,
+            splits,
+        }
+    }
+
+    #[test]
+    fn missing_root_rejected() {
+        let tab = tab_with_splits(
+            HashMap::from([("other".into(), split(SplitAxis::Rows, &["a", "b"]))]),
+            vec![pane("a"), pane("b")],
+        );
+
+        assert!(tab.validate_splits().is_err());
+    }
+
+    #[test]
+    fn cycle_detected() {
+        let tab = tab_with_splits(
+            HashMap::from([
+                ("root".into(), split(SplitAxis::Columns, &["left", "right"])),
+                ("left".into(), split(SplitAxis::Rows, &["root", "a"])),
+            ]),
+            vec![pane("a")],
+        );
+
+        assert!(tab.validate_splits().is_err());
+    }
+
+    #[test]
+    fn leaf_without_pane_rejected() {
+        let tab = tab_with_splits(
+            HashMap::from([("root".into(), split(SplitAxis::Columns, &["a", "b"]))]),
+            vec![pane("a")],
+        );
+
+        assert!(tab.validate_splits().is_err());
+    }
+
+    #[test]
+    fn duplicate_pane_for_leaf_rejected() {
+        let tab = tab_with_splits(
+            HashMap::from([("root".into(), split(SplitAxis::Columns, &["a", "b"]))]),
+            vec![pane("a"), pane("b"), pane("b")],
+        );
+
+        assert!(tab.validate_splits().is_err());
+    }
+
+    #[test]
+    fn ratio_length_mismatch_rejected() {
+        let tab = tab_with_splits(
+            HashMap::from([(
+                "root".into(),
+                SplitNode {
+                    dir: SplitAxis::Columns,
+                    ratio: vec![Weight::Percent(60), Weight::Percent(40)],
+                    parts: vec!["a".into(), "b".into(), "c".into()],
+                },
+            )]),
+            vec![pane("a"), pane("b"), pane("c")],
+        );
+
+        assert!(tab.validate_splits().is_err());
+    }
+
+    #[test]
+    fn percent_ratio_not_summing_to_100_rejected() {
+        let tab = tab_with_splits(
+            HashMap::from([(
+                "root".into(),
+                SplitNode {
+                    dir: SplitAxis::Columns,
+                    ratio: vec![Weight::Percent(60), Weight::Percent(30)],
+                    parts: vec!["a".into(), "b".into()],
+                },
+            )]),
+            vec![pane("a"), pane("b")],
+        );
+
+        assert!(tab.validate_splits().is_err());
+    }
+
+    #[test]
+    fn valid_splits_returns_leaves() {
+        let tab = tab_with_splits(
+            HashMap::from([
+                ("root".into(), split(SplitAxis::Columns, &["a", "right"])),
+                ("right".into(), split(SplitAxis::Rows, &["b", "c"])),
+            ]),
+            vec![pane("a"), pane("b"), pane("c")],
+        );
+
+        let leaves = tab.validate_splits().unwrap();
+
+        assert_eq!(leaves.len(), 3);
+        assert!(leaves.contains(&"a".to_string()));
+        assert!(leaves.contains(&"b".to_string()));
+        assert!(leaves.contains(&"c".to_string()));
+    }
+
+    #[test]
+    fn pane_missing_area_in_split_tab_rejected() {
+        let tab = Tab {
+            title: "test".into(),
+            cwd: PathBuf::new(),
+            panes: vec![Pane {
+                area: None,
+                run: None,
+                depends_on: None,
+                hold: false,
+                ready_when: None,
+            }],
+            splits: HashMap::new(),
+        };
+
+        let leaf_areas = vec!["db".to_string()];
+
+        assert!(tab.validate_panes(&leaf_areas).is_err());
+    }
+
+    #[test]
+    fn pane_with_unknown_area_rejected() {
+        let tab = tab_with_splits(HashMap::new(), vec![pane("unknown")]);
+
+        assert!(tab.validate_panes(&["db".to_string()]).is_err());
+    }
+
+    #[test]
+    fn single_pane_tab_skips_area_validation() {
+        let tab = tab_with_splits(
+            HashMap::new(),
+            vec![Pane {
+                area: None,
+                run: None,
+                depends_on: None,
+                hold: false,
+                ready_when: None,
+            }],
+        );
+
+        assert!(tab.validate_panes(&[]).is_ok());
+    }
+
+    #[test]
+    fn invalid_url_in_pane_rejected() {
+        let tab = Tab {
+            title: "test".into(),
+            cwd: PathBuf::new(),
+            panes: vec![Pane {
+                area: None,
+                run: None,
+                depends_on: None,
+                hold: false,
+                ready_when: Some(ReadyWhen {
+                    condition: Condition::Http("not-a-url".into()),
+                    timeout: None,
+                }),
+            }],
+
+            splits: HashMap::new(),
+        };
+
+        assert!(tab.validate_ready_when().is_err());
+    }
+
+    #[test]
+    fn invalid_timeout_in_pane_rejected() {
+        let tab = Tab {
+            title: "test".into(),
+            cwd: PathBuf::new(),
+            panes: vec![Pane {
+                area: None,
+                run: None,
+                depends_on: None,
+                hold: false,
+                ready_when: Some(ReadyWhen {
+                    condition: Condition::Port(5432),
+                    timeout: Some("bad".into()),
+                }),
+            }],
+            splits: HashMap::new(),
+        };
+        assert!(tab.validate_ready_when().is_err());
+    }
+
+    #[test]
+    fn nonexistent_cwd_rejected() {
+        let mut tab = Tab {
+            title: "test".into(),
+            cwd: PathBuf::from("nonexistent_dir_xyz"),
+            panes: vec![],
+            splits: HashMap::new(),
+        };
+
+        assert!(tab.validate(Path::new("/tmp")).is_err());
+    }
+
+    #[test]
+    fn too_many_panes_without_splits_rejected() {
+        let mut tab = Tab {
+            title: "test".into(),
+            cwd: PathBuf::new(),
+            panes: vec![pane("a"), pane("b")],
+            splits: HashMap::new(),
+        };
+
+        assert!(tab.validate(Path::new("/tmp")).is_err());
+    }
+
+    #[test]
+    fn valid_single_pane_tab() {
+        let mut tab = Tab {
+            title: "test".into(),
+            cwd: PathBuf::new(),
+            panes: vec![Pane {
+                area: None,
+                run: None,
+                depends_on: None,
+                hold: false,
+                ready_when: None,
+            }],
+            splits: HashMap::new(),
+        };
+
+        assert!(tab.validate(Path::new("/tmp")).is_ok());
+    }
+}

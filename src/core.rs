@@ -98,3 +98,113 @@ impl Config {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::{
+        driver_kind::DriverKind, pane::Pane, tab::Tab, timeout_action::TimeoutAction,
+        workspace::Workspace,
+    };
+
+    fn base_config(base: &str, tabs: Vec<Tab>) -> Config {
+        Config {
+            workspace: Workspace {
+                name: "test".into(),
+                base: PathBuf::from(base),
+                driver: DriverKind::Konsole,
+                on_timeout: TimeoutAction::Continue,
+            },
+            env: HashMap::new(),
+            tabs,
+        }
+    }
+
+    fn pane_with_area(area: &str, deps: Option<Vec<&str>>) -> Pane {
+        Pane {
+            area: Some(area.into()),
+            run: None,
+            depends_on: deps.map(|d| d.into_iter().map(str::to_string).collect()),
+            hold: false,
+            ready_when: None,
+        }
+    }
+
+    fn tab_with_panes(panes: Vec<Pane>) -> Tab {
+        Tab {
+            title: "t".into(),
+            cwd: PathBuf::from("/tmp"),
+            panes,
+            splits: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn valid_cross_tab_depends_on() {
+        let config = base_config(
+            "/tmp",
+            vec![
+                tab_with_panes(vec![pane_with_area("db", None)]),
+                tab_with_panes(vec![pane_with_area("api", Some(vec!["db"]))]),
+            ],
+        );
+
+        assert!(config.validate_depends_on().is_ok());
+    }
+
+    #[test]
+    fn unknown_depends_on_rejected() {
+        let config = base_config(
+            "/tmp",
+            vec![tab_with_panes(vec![pane_with_area(
+                "api",
+                Some(vec!["nonexistent"]),
+            )])],
+        );
+
+        assert!(config.validate_depends_on().is_err());
+    }
+
+    #[test]
+    fn missing_file_returns_error() {
+        assert!(Config::load_from_file("/nonexistent/path/kws.toml").is_err());
+    }
+
+    #[test]
+    fn valid_minimal_config() {
+        let toml = r#"
+            [workspace]
+            name = "test"
+            base = "/tmp"
+
+            [[tab]]
+            title = "main"
+
+              [[tab.pane]]
+              run = "echo hello"
+        "#;
+
+        let mut config: Config = toml::from_str(toml).unwrap();
+
+        assert!(config.validate().is_ok());
+        assert_eq!(config.workspace.name, "test");
+        assert_eq!(config.tabs.len(), 1);
+    }
+
+    #[test]
+    fn nonexistent_base_rejected() {
+        let toml = r#"
+            [workspace]
+            name = "test"
+            base = "/nonexistent/path/xyz"
+        "#;
+
+        let mut config: Config = toml::from_str(toml).unwrap();
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn invalid_toml_rejected() {
+        assert!(Config::load_from_file("/dev/null").is_err());
+    }
+}
