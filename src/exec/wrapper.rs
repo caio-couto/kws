@@ -22,7 +22,7 @@ pub fn wrap_command(spec: &WrapSpec) -> String {
     let cwd = spec.cwd.display();
     let log_file = spec.log_file.display();
     let exit_file = spec.exit_file.display();
-    let run = spec.run;
+    let run = shell_quote(spec.run);
 
     let after_exit = if spec.hold {
         "exec \"$SHELL\""
@@ -30,8 +30,12 @@ pub fn wrap_command(spec: &WrapSpec) -> String {
         "exit \"$ec\""
     };
 
+    // `run` roda dentro de um script -c, não direto: sem isso, o processo
+    // filho enxerga o stdout como um pipe (por causa do tee logo abaixo) em
+    // vez de um terminal de verdade, e programas que checam isatty()
+    // (docker compose, etc.) mudam de comportamento ou saem cedo.
     format!(
-        "clear; if cd \"{cwd}\"; then {exports}{{ {{ {run}; }} > >(tee \"{log_file}\") 2>&1; }}; ec=$?; else ec=1; fi; echo \"$ec\" > \"{exit_file}\"; {after_exit}"
+        "clear; if cd \"{cwd}\"; then {exports}{{ script -qefc {run} /dev/null; }} > >(tee \"{log_file}\") 2>&1; ec=$?; else ec=1; fi; echo \"$ec\" > \"{exit_file}\"; {after_exit}"
     )
 }
 
@@ -126,7 +130,7 @@ mod tests {
         let spec = WrapSpec {
             run: "pnpm dev",
             env: &env,
-            cwd: Path::new("/home/caio/proj/vello-ai/apps/web"),
+            cwd: Path::new("/home/caio/proj/frontend/apps/web"),
             log_file: Path::new("/tmp/a.log"),
             exit_file: Path::new("/tmp/a.exit"),
             hold: false,
@@ -134,7 +138,24 @@ mod tests {
 
         let cmd = wrap_command(&spec);
 
-        assert!(cmd.contains("if cd \"/home/caio/proj/vello-ai/apps/web\"; then"));
+        assert!(cmd.contains("if cd \"/home/caio/proj/frontend/apps/web\"; then"));
+    }
+
+    #[test]
+    fn wraps_run_in_script_to_preserve_a_real_tty() {
+        let env = HashMap::new();
+        let spec = WrapSpec {
+            run: "claude .",
+            env: &env,
+            cwd: Path::new("/tmp"),
+            log_file: Path::new("/tmp/a.log"),
+            exit_file: Path::new("/tmp/a.exit"),
+            hold: false,
+        };
+
+        let cmd = wrap_command(&spec);
+
+        assert!(cmd.contains("script -qefc 'claude .' /dev/null"));
     }
 
     #[test]
