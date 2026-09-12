@@ -8,6 +8,7 @@ use crate::{
 use dbus::blocking::Connection;
 use std::{
     collections::HashMap,
+    path::PathBuf,
     process::Command,
     sync::Mutex,
     time::{Duration, Instant},
@@ -17,12 +18,30 @@ const CALL_TIMEOUT: Duration = Duration::from_secs(5);
 const OPEN_WINDOW_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_WINDOW_PROBE: i32 = 32;
 
+const DBUS_ACCESS_DENIED: &str = "org.freedesktop.DBus.Error.AccessDenied";
+
+const DBUS_SECURITY_HINT: &str = "\
+o Konsole está com a API de DBus sensível a segurança desativada, e o kws depende dela pra \
+rodar comandos nos painéis.
+
+Habilite em: Konsole > Configurações > Configurar Konsole > Geral > 'Enable the security \
+sensitive parts of the DBus API'
+
+Ou direto pelo terminal:
+  kwriteconfig6 --file konsolerc --group KonsoleWindow --key EnableSecuritySensitiveDBusAPI --type bool true
+
+Depois, feche todas as janelas do Konsole e rode o kws de novo.";
+
 pub struct KonsoleDriver {
     pub attach: bool,
 }
 
 impl driver::Driver for KonsoleDriver {
     fn open_window(&self, _workspace_name: &str) -> Result<Box<dyn driver::Window>, KwsError> {
+        if !dbus_security_enabled() {
+            return Err(KwsError::Driver(DBUS_SECURITY_HINT.into()));
+        }
+
         let conn = Connection::new_session()
             .map_err(|e| KwsError::Driver(format!("falha ao conectar no DBus: {e}")))?;
 
@@ -89,6 +108,38 @@ impl driver::Driver for KonsoleDriver {
             std::thread::sleep(Duration::from_millis(100));
         }
     }
+}
+
+fn dbus_security_enabled() -> bool {
+    let config_dir = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")));
+
+    config_dir
+        .and_then(|dir| std::fs::read_to_string(dir.join("konsolerc")).ok())
+        .map(|content| parse_dbus_security_enabled(&content))
+        .unwrap_or(false)
+}
+
+fn parse_dbus_security_enabled(konsolerc: &str) -> bool {
+    let mut in_konsole_window = false;
+
+    for line in konsolerc.lines() {
+        let line = line.trim();
+
+        if let Some(section) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
+            in_konsole_window = section == "KonsoleWindow";
+            continue;
+        }
+
+        if in_konsole_window
+            && let Some(value) = line.strip_prefix("EnableSecuritySensitiveDBusAPI=")
+        {
+            return value.trim().eq_ignore_ascii_case("true");
+        }
+    }
+
+    false
 }
 
 fn list_konsole_services(conn: &Connection) -> Vec<String> {
@@ -380,6 +431,46 @@ impl driver::Pane for KonsolePane {
                 "sendText",
                 (format!("{command}\n"),),
             )
-            .map_err(|e| KwsError::Driver(format!("falha ao enviar comando: {e}")))
+            .map_err(|e| {
+                if e.name() == Some(DBUS_ACCESS_DENIED) {
+                    KwsError::Driver(DBUS_SECURITY_HINT.into())
+                } else {
+                    KwsError::Driver(format!("falha ao enviar comando: {e}"))
+                }
+            })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_enabled_flag() {
+        let konsolerc = "[General]\nfoo=bar\n\n[KonsoleWindow]\nEnableSecuritySensitiveDBusAPI=true\n";
+        assert!(parse_dbus_security_enabled(konsolerc));
+    }
+
+    #[test]
+    fn detects_disabled_flag() {
+        let konsolerc = "[KonsoleWindow]\nEnableSecuritySensitiveDBusAPI=false\n";
+        assert!(!parse_dbus_security_enabled(konsolerc));
+    }
+
+    #[test]
+    fn missing_key_defaults_to_disabled() {
+        let konsolerc = "[KonsoleWindow]\nUseSingleInstance=true\n";
+        assert!(!parse_dbus_security_enabled(konsolerc));
+    }
+
+    #[test]
+    fn missing_section_defaults_to_disabled() {
+        assert!(!parse_dbus_security_enabled(""));
+    }
+
+    #[test]
+    fn key_outside_konsole_window_section_is_ignored() {
+        let konsolerc = "[Other]\nEnableSecuritySensitiveDBusAPI=true\n\n[KonsoleWindow]\nfoo=bar\n";
+        assert!(!parse_dbus_security_enabled(konsolerc));
     }
 }
