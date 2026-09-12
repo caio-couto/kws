@@ -35,6 +35,14 @@ pub struct Config {
 
 impl Config {
     pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self, KwsError> {
+        let mut config = Self::parse_from_file(path)?;
+
+        config.validate()?;
+
+        Ok(config)
+    }
+
+    pub fn parse_from_file<P: AsRef<Path>>(path: P) -> Result<Self, KwsError> {
         let path: &Path = path.as_ref();
 
         let content: String = fs::read_to_string(path).map_err(|e| match e.kind() {
@@ -42,19 +50,14 @@ impl Config {
             _ => KwsError::SystemIo(e),
         })?;
 
-        let mut config: Self =
-            toml::from_str(&content).map_err(|e| KwsError::InvalidConfigFile {
-                error: Box::new(e),
-                raw_content: content.clone(),
-                file_path: path.to_path_buf(),
-            })?;
-
-        config.validate()?;
-
-        Ok(config)
+        toml::from_str(&content).map_err(|e| KwsError::InvalidConfigFile {
+            error: Box::new(e),
+            raw_content: content.clone(),
+            file_path: path.to_path_buf(),
+        })
     }
 
-    fn validate(&mut self) -> Result<(), KwsError> {
+    pub fn validate(&mut self) -> Result<(), KwsError> {
         if self.workspace.driver == DriverKind::Konsole && !cfg!(target_os = "linux") {
             return Err(KwsError::UnsupportedDriver(self.workspace.driver));
         }
