@@ -123,7 +123,7 @@ mod tests {
     fn pane_with_area(area: &str, deps: Option<Vec<&str>>) -> Pane {
         Pane {
             area: Some(area.into()),
-            run: None,
+            run: Some("true".into()),
             depends_on: deps.map(|d| d.into_iter().map(str::to_string).collect()),
             hold: false,
             ready_when: None,

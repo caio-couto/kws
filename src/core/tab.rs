@@ -158,6 +158,15 @@ impl Tab {
     }
 
     fn validate_panes(&self, leaf_areas: &[String]) -> Result<(), KwsError> {
+        for pane in &self.panes {
+            if pane.run.is_none() {
+                return Err(KwsError::ValidationError(format!(
+                    "painel na aba '{}': 'run' é obrigatório",
+                    self.title
+                )));
+            }
+        }
+
         if leaf_areas.is_empty() {
             return Ok(());
         }
@@ -201,7 +210,7 @@ mod tests {
     fn pane(area: &str) -> Pane {
         Pane {
             area: Some(area.into()),
-            run: None,
+            run: Some("true".into()),
             depends_on: None,
             hold: false,
             ready_when: None,
@@ -327,7 +336,7 @@ mod tests {
             cwd: PathBuf::new(),
             panes: vec![Pane {
                 area: None,
-                run: None,
+                run: Some("true".into()),
                 depends_on: None,
                 hold: false,
                 ready_when: None,
@@ -353,7 +362,7 @@ mod tests {
             HashMap::new(),
             vec![Pane {
                 area: None,
-                run: None,
+                run: Some("true".into()),
                 depends_on: None,
                 hold: false,
                 ready_when: None,
@@ -370,7 +379,7 @@ mod tests {
             cwd: PathBuf::new(),
             panes: vec![Pane {
                 area: None,
-                run: None,
+                run: Some("true".into()),
                 depends_on: None,
                 hold: false,
                 ready_when: Some(ReadyWhen {
@@ -392,7 +401,7 @@ mod tests {
             cwd: PathBuf::new(),
             panes: vec![Pane {
                 area: None,
-                run: None,
+                run: Some("true".into()),
                 depends_on: None,
                 hold: false,
                 ready_when: Some(ReadyWhen {
@@ -436,7 +445,7 @@ mod tests {
             cwd: PathBuf::new(),
             panes: vec![Pane {
                 area: None,
-                run: None,
+                run: Some("true".into()),
                 depends_on: None,
                 hold: false,
                 ready_when: None,
@@ -445,5 +454,20 @@ mod tests {
         };
 
         assert!(tab.validate(Path::new("/tmp")).is_ok());
+    }
+
+    #[test]
+    fn pane_without_run_rejected() {
+        let tab = tab_with_splits(HashMap::new(), vec![pane("main")]);
+
+        let mut panes = tab.panes;
+        panes[0].run = None;
+
+        let tab = Tab {
+            panes,
+            ..tab_with_splits(HashMap::new(), vec![])
+        };
+
+        assert!(tab.validate_panes(&[]).is_err());
     }
 }
