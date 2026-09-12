@@ -1,5 +1,6 @@
 use std::process;
 
+mod cli;
 mod core;
 mod driver;
 mod error;

@@ -14,7 +14,7 @@ pub struct Workspace {
 }
 
 impl Workspace {
-    pub(super) fn expand_tilde(path: &Path) -> PathBuf {
+    pub(crate) fn expand_tilde(path: &Path) -> PathBuf {
         let s: &str = path.to_str().unwrap_or("");
 
         if s == "~" {
