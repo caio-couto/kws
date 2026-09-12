@@ -7,14 +7,32 @@ no terceiro, tudo no diretório certo, na ordem certa, no layout certo.
 
 Você descreve isso uma vez num arquivo de configuração. O kws abre tudo. Fim do problema.
 
+## Pré-requisito: DBus sensível a segurança no Konsole
+
+O kws controla o Konsole via DBus, e o Konsole vem com os métodos de DBus que executam
+comandos (`sendText`/`runCommand`) **desativados por padrão** por segurança. Sem habilitar
+isso, o kws consegue abrir janelas/abas/splits, mas nenhum comando roda.
+
+Habilite em **Konsole > Configurações > Configurar Konsole > Geral > "Enable the security
+sensitive parts of the DBus API"**, ou direto pelo terminal:
+
+```sh
+kwriteconfig6 --file konsolerc --group KonsoleWindow --key EnableSecuritySensitiveDBusAPI --type bool true
+```
+
+Depois, feche todas as janelas do Konsole abertas e rode o kws de novo (a configuração só
+é lida quando uma janela nova é criada). Se você esquecer, o kws detecta isso antes de
+tentar abrir qualquer coisa e devolve essa mesma instrução no terminal.
+
 ## Uso
 
 Os workspaces ficam em `~/.config/kws/*.toml` e são abertos pelo nome:
 
 ```sh
-kws financeiro        # sobe usando a `base` definida no arquivo
-kws financeiro .      # sobe usando o diretório atual como `base`
-kws financeiro ~/x    # sobe usando ~/x como `base`
+kws financeiro           # sobe usando a `base` definida no arquivo, numa janela nova
+kws financeiro .         # sobe usando o diretório atual como `base`
+kws financeiro ~/x       # sobe usando ~/x como `base`
+kws financeiro --attach  # anexa as abas numa janela do Konsole já aberta, em vez de criar uma nova
 ```
 
 ## Exemplo de configuração
