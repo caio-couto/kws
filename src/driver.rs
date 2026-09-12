@@ -23,6 +23,9 @@ pub trait Pane: Sync {
 }
 
 #[cfg(test)]
+pub mod local;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
