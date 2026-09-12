@@ -14,6 +14,7 @@ pub enum KwsError {
     SystemIo(std::io::Error),
     UnsupportedDriver(DriverKind),
     ValidationError(String),
+    Driver(String),
 }
 
 impl KwsError {
@@ -83,6 +84,9 @@ impl fmt::Display for KwsError {
             }
             KwsError::UnsupportedDriver(driver) => {
                 write!(f, "O driver {} não é suportado pelo sistema", driver)
+            }
+            KwsError::Driver(message) => {
+                write!(f, "Erro ao controlar o terminal: {message}")
             }
         }
     }
