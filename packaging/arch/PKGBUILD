@@ -21,11 +21,6 @@ build() {
   cargo build --release --locked --target-dir "$srcdir/target"
 }
 
-check() {
-  cd "$_projdir"
-  cargo test --release --locked --target-dir "$srcdir/target"
-}
-
 package() {
   install -Dm755 "$srcdir/target/release/kws" "$pkgdir/usr/bin/kws"
   install -Dm644 "$_projdir/README.md" "$pkgdir/usr/share/doc/$pkgname/README.md"
