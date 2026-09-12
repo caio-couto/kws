@@ -11,9 +11,6 @@ options=('!lto')
 source=()
 sha256sums=()
 
-# PKGBUILD fica em packaging/arch/, fora da raiz do projeto: o src/ e pkg/
-# que o makepkg cria durante o build ficam isolados aqui dentro, sem colidir
-# com o src/ real do kws (que fica um nível acima, em $_projdir).
 _projdir="$startdir/../.."
 
 build() {
