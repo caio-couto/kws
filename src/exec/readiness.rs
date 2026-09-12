@@ -50,7 +50,7 @@ fn check_once(condition: &Condition, exit_file: &Path, log_file: &Path) -> bool 
         }
         Condition::Http(url) => ureq::get(url)
             .call()
-            .map(|r| (200..300).contains(&r.status()))
+            .map(|r| r.status().is_success())
             .unwrap_or(false),
         Condition::File(path) => Path::new(path).exists(),
         Condition::Exit(expected) => fs::read_to_string(exit_file)
