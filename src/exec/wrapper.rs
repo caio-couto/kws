@@ -29,7 +29,7 @@ pub fn wrap_command(spec: &WrapSpec) -> String {
     };
 
     format!(
-        "{exports}{{ {{ {run}; }} > >(tee \"{log_file}\") 2>&1; }}; ec=$?; echo \"$ec\" > \"{exit_file}\"; {after_exit}"
+        "clear; {exports}{{ {{ {run}; }} > >(tee \"{log_file}\") 2>&1; }}; ec=$?; echo \"$ec\" > \"{exit_file}\"; {after_exit}"
     )
 }
 

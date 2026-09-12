@@ -1,69 +1,192 @@
-// Verificado manualmente em: <preencher versão do Konsole ao rodar o checklist>
+// Verificado manualmente em: Konsole 26.08.0 (Arch Linux, Wayland)
 
-use crate::{core::split_node::SplitNode, driver, error::KwsError};
+use crate::{
+    core::{split_axis::SplitAxis, split_node::SplitNode},
+    driver,
+    error::KwsError,
+};
 use dbus::blocking::Connection;
-use std::{collections::HashMap, process::Command, time::Duration};
+use std::{
+    collections::HashMap,
+    process::Command,
+    time::{Duration, Instant},
+};
 
 const CALL_TIMEOUT: Duration = Duration::from_secs(5);
+const OPEN_WINDOW_TIMEOUT: Duration = Duration::from_secs(10);
+const MAX_WINDOW_PROBE: i32 = 32;
 
 pub struct KonsoleDriver;
 
 impl driver::Driver for KonsoleDriver {
     fn open_window(&self, _workspace_name: &str) -> Result<Box<dyn driver::Window>, KwsError> {
-        Command::new("konsole")
-            .arg("--new-window")
-            .spawn()
-            .map_err(KwsError::SystemIo)?;
-
         let conn = Connection::new_session()
             .map_err(|e| KwsError::Driver(format!("falha ao conectar no DBus: {e}")))?;
 
-        let service = find_konsole_service(&conn)?;
+        // Konsole roda em modo single-instance: nossa nova invocação pode ser
+        // absorvida por QUALQUER processo já rodando, não necessariamente o
+        // "mais recente". Por isso comparamos as janelas de TODAS as
+        // instâncias existentes, não só de uma escolhida por heurística.
+        let before = snapshot_windows(&conn);
 
-        Ok(Box::new(KonsoleWindow { service }))
+        Command::new("konsole")
+            .spawn()
+            .map_err(KwsError::SystemIo)?;
+
+        let deadline = Instant::now() + OPEN_WINDOW_TIMEOUT;
+
+        loop {
+            for (service, windows) in snapshot_windows(&conn) {
+                let before_windows = before.get(&service);
+                let new_window = windows
+                    .into_iter()
+                    .find(|n| before_windows.is_none_or(|b| !b.contains(n)));
+
+                if let Some(n) = new_window {
+                    return Ok(Box::new(KonsoleWindow {
+                        service,
+                        window_path: format!("/Windows/{n}"),
+                    }));
+                }
+            }
+
+            if Instant::now() >= deadline {
+                return Err(KwsError::Driver(
+                    "timeout esperando o Konsole abrir uma nova janela".into(),
+                ));
+            }
+
+            std::thread::sleep(Duration::from_millis(100));
+        }
     }
 }
 
-fn find_konsole_service(conn: &Connection) -> Result<String, KwsError> {
+fn list_konsole_services(conn: &Connection) -> Vec<String> {
     let proxy = conn.with_proxy("org.freedesktop.DBus", "/", CALL_TIMEOUT);
-    let (names,): (Vec<String>,) = proxy
-        .method_call("org.freedesktop.DBus", "ListNames", ())
-        .map_err(|e| KwsError::Driver(format!("falha ao listar serviços DBus: {e}")))?;
+    let result: Result<(Vec<String>,), _> =
+        proxy.method_call("org.freedesktop.DBus", "ListNames", ());
 
-    // Konsole registra um serviço por instância, ex: "org.kde.konsole-12345".
-    // Como acabamos de lançar uma janela nova, pegamos a mais recente (maior PID
-    // numérico no sufixo), heurística sujeita a ajuste no spike manual.
-    names
+    result
+        .map(|(names,)| {
+            names
+                .into_iter()
+                .filter(|n| n.starts_with("org.kde.konsole-"))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn snapshot_windows(conn: &Connection) -> HashMap<String, Vec<i32>> {
+    list_konsole_services(conn)
         .into_iter()
-        .filter(|n| n.starts_with("org.kde.konsole"))
-        .max()
-        .ok_or_else(|| KwsError::Driver("nenhuma instância do Konsole encontrada no DBus".into()))
+        .map(|service| {
+            let windows = list_window_numbers(conn, &service);
+            (service, windows)
+        })
+        .collect()
+}
+
+fn list_window_numbers(conn: &Connection, service: &str) -> Vec<i32> {
+    (1..=MAX_WINDOW_PROBE)
+        .filter(|n| {
+            let proxy = conn.with_proxy(service, format!("/Windows/{n}"), CALL_TIMEOUT);
+            proxy
+                .method_call::<(String,), _, _, _>(
+                    "org.freedesktop.DBus.Introspectable",
+                    "Introspect",
+                    (),
+                )
+                .is_ok()
+        })
+        .collect()
+}
+
+fn session_list(
+    window_proxy: &dbus::blocking::Proxy<'_, &Connection>,
+) -> Result<Vec<i32>, KwsError> {
+    let (list,): (Vec<String>,) = window_proxy
+        .method_call("org.kde.konsole.Window", "sessionList", ())
+        .map_err(|e| KwsError::Driver(format!("falha ao listar sessões: {e}")))?;
+
+    Ok(list.iter().filter_map(|s| s.parse().ok()).collect())
+}
+
+// viewHierarchy() devolve uma árvore por aba, serializada como
+// "(splitterId)[v1|v2|...]" ("[]" = lado a lado, "{}" = empilhado), onde os
+// splitters aninhados reaparecem como "(id){...}"/"(id)[...]" dentro da
+// árvore. Os inteiros "soltos" (fora de parênteses) são ids de
+// TerminalDisplay, um espaço de ids totalmente separado dos ids de sessão
+// usados em sendText/Sessions/N. Extrai só esses ids soltos, removendo antes
+// os prefixos "(N)" de splitter.
+fn leaf_view_ids(trees: &[String]) -> Result<Vec<i32>, KwsError> {
+    let splitter_id = regex::Regex::new(r"\(\d+\)").expect("regex estática válida");
+    let bare_id = regex::Regex::new(r"\d+").expect("regex estática válida");
+
+    trees
+        .iter()
+        .flat_map(|tree| {
+            let stripped = splitter_id.replace_all(tree, "");
+            bare_id
+                .find_iter(&stripped.into_owned())
+                .map(|m| m.as_str().to_string())
+                .collect::<Vec<_>>()
+        })
+        .map(|s| {
+            s.parse::<i32>()
+                .map_err(|e| KwsError::Driver(format!("id de view inválido '{s}': {e}")))
+        })
+        .collect()
+}
+
+fn view_hierarchy(
+    window_proxy: &dbus::blocking::Proxy<'_, &Connection>,
+) -> Result<Vec<i32>, KwsError> {
+    let (trees,): (Vec<String>,) = window_proxy
+        .method_call("org.kde.konsole.Window", "viewHierarchy", ())
+        .map_err(|e| KwsError::Driver(format!("falha ao ler o layout de abas: {e}")))?;
+
+    leaf_view_ids(&trees)
 }
 
 struct KonsoleWindow {
     service: String,
+    window_path: String,
 }
 
 impl driver::Window for KonsoleWindow {
     fn open_tab(&self, _title: &str) -> Result<Box<dyn driver::Tab>, KwsError> {
         let conn = Connection::new_session()
             .map_err(|e| KwsError::Driver(format!("falha ao conectar no DBus: {e}")))?;
-        let proxy = conn.with_proxy(&self.service, "/Windows/1", CALL_TIMEOUT);
+        let proxy = conn.with_proxy(&self.service, &self.window_path, CALL_TIMEOUT);
+
+        let before_views = view_hierarchy(&proxy)?;
 
         let (session_id,): (i32,) = proxy
             .method_call("org.kde.konsole.Window", "newSession", ())
             .map_err(|e| KwsError::Driver(format!("falha ao criar aba no Konsole: {e}")))?;
 
+        let after_views = view_hierarchy(&proxy)?;
+        let view_id = after_views
+            .into_iter()
+            .find(|v| !before_views.contains(v))
+            .ok_or_else(|| {
+                KwsError::Driver("não foi possível identificar a view da aba nova".into())
+            })?;
+
         Ok(Box::new(KonsoleTab {
             service: self.service.clone(),
+            window_path: self.window_path.clone(),
             session_id,
+            view_id,
         }))
     }
 }
 
 struct KonsoleTab {
     service: String,
+    window_path: String,
     session_id: i32,
+    view_id: i32,
 }
 
 impl driver::Tab for KonsoleTab {
@@ -73,10 +196,18 @@ impl driver::Tab for KonsoleTab {
     ) -> Result<HashMap<String, Box<dyn driver::Pane>>, KwsError> {
         let conn = Connection::new_session()
             .map_err(|e| KwsError::Driver(format!("falha ao conectar no DBus: {e}")))?;
-        let window_proxy = conn.with_proxy(&self.service, "/Windows/1", CALL_TIMEOUT);
+        let window_proxy = conn.with_proxy(&self.service, &self.window_path, CALL_TIMEOUT);
 
         let mut areas: HashMap<String, Box<dyn driver::Pane>> = HashMap::new();
-        self.split_node(&window_proxy, splits, "root", &mut areas)?;
+
+        self.split_node(
+            &window_proxy,
+            splits,
+            "root",
+            self.view_id,
+            self.session_id,
+            &mut areas,
+        )?;
 
         Ok(areas)
     }
@@ -90,46 +221,81 @@ impl driver::Tab for KonsoleTab {
 }
 
 impl KonsoleTab {
-    // Percorre a árvore de splits recursivamente, disparando as actions internas
-    // do Konsole para dividir a view atual e navegar até a próxima folha. Os nomes
-    // de action ("split-view-left-right", "split-view-top-bottom") foram
-    // verificados manualmente contra a versão de Konsole documentada no README de
-    // verificação, se a versão instalada divergir, ajuste as constantes.
+    // createSplit recebe o id da *view* (TerminalDisplay), não o id de
+    // sessão, e não devolve nem um nem outro. Então a cada split
+    // comparamos viewHierarchy()/sessionList() antes/depois pra descobrir
+    // os dois ids da view nova.
     fn split_node(
         &self,
         window_proxy: &dbus::blocking::Proxy<'_, &Connection>,
         splits: &HashMap<String, SplitNode>,
         node_name: &str,
+        view_id: i32,
+        session_id: i32,
         areas: &mut HashMap<String, Box<dyn driver::Pane>>,
     ) -> Result<(), KwsError> {
         let node = splits
             .get(node_name)
             .ok_or_else(|| KwsError::Driver(format!("nó '{node_name}' não encontrado")))?;
 
-        let action = match node.dir {
-            crate::core::split_axis::SplitAxis::Columns => "split-view-left-right",
-            crate::core::split_axis::SplitAxis::Rows => "split-view-top-bottom",
-        };
+        let horizontal = matches!(node.dir, SplitAxis::Columns);
+        let last_index = node.parts.len().saturating_sub(1);
+        let mut current_view = view_id;
+        let mut current_session = session_id;
 
         for (i, part) in node.parts.iter().enumerate() {
-            if i > 0 {
-                window_proxy
-                    .method_call::<(), _, _, _>(
+            let (this_view, this_session) = if i == last_index {
+                (current_view, current_session)
+            } else {
+                let before_views = view_hierarchy(window_proxy)?;
+                let before_sessions = session_list(window_proxy)?;
+
+                let (ok,): (bool,) = window_proxy
+                    .method_call(
                         "org.kde.konsole.Window",
-                        "activateAction",
-                        (action,),
+                        "createSplit",
+                        (current_view, horizontal),
                     )
                     .map_err(|e| KwsError::Driver(format!("falha ao dividir painel: {e}")))?;
-            }
+
+                if !ok {
+                    return Err(KwsError::Driver(format!(
+                        "Konsole recusou dividir o painel da view {current_view}"
+                    )));
+                }
+
+                let new_view = view_hierarchy(window_proxy)?
+                    .into_iter()
+                    .find(|v| !before_views.contains(v))
+                    .ok_or_else(|| {
+                        KwsError::Driver(
+                            "não foi possível identificar a view nova após o split".into(),
+                        )
+                    })?;
+                let new_session = session_list(window_proxy)?
+                    .into_iter()
+                    .find(|s| !before_sessions.contains(s))
+                    .ok_or_else(|| {
+                        KwsError::Driver(
+                            "não foi possível identificar a sessão nova após o split".into(),
+                        )
+                    })?;
+
+                let this = (current_view, current_session);
+
+                current_view = new_view;
+                current_session = new_session;
+                this
+            };
 
             if splits.contains_key(part.as_str()) {
-                self.split_node(window_proxy, splits, part, areas)?;
+                self.split_node(window_proxy, splits, part, this_view, this_session, areas)?;
             } else {
                 areas.insert(
                     part.clone(),
                     Box::new(KonsolePane {
                         service: self.service.clone(),
-                        session_id: self.session_id,
+                        session_id: this_session,
                     }),
                 );
             }
