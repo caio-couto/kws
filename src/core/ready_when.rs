@@ -20,6 +20,14 @@ impl ReadyWhen {
             )));
         }
 
+        if let Condition::Log(pattern) = &self.condition
+            && let Err(err) = regex::Regex::new(pattern)
+        {
+            return Err(KwsError::ValidationError(format!(
+                "regex inválida '{pattern}' na aba '{tab_title}': {err}"
+            )));
+        }
+
         if let Condition::Delay(s) = &self.condition {
             Self::parse_duration(s)?;
         }
@@ -31,7 +39,7 @@ impl ReadyWhen {
         Ok(())
     }
 
-    fn parse_duration(s: &str) -> Result<Duration, KwsError> {
+    pub(crate) fn parse_duration(s: &str) -> Result<Duration, KwsError> {
         let s: &str = s.trim();
 
         let err =
@@ -160,6 +168,38 @@ mod tests {
     fn invalid_timeout_rejected() {
         assert!(
             rw(Condition::Port(5432), Some("abc"))
+                .validate("tab")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn valid_file_condition() {
+        assert!(
+            rw(Condition::File("/tmp/app.sock".into()), None)
+                .validate("tab")
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn valid_exit_condition() {
+        assert!(rw(Condition::Exit(0), None).validate("tab").is_ok());
+    }
+
+    #[test]
+    fn valid_log_condition() {
+        assert!(
+            rw(Condition::Log("listening on \\d+".into()), None)
+                .validate("tab")
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn invalid_log_regex_rejected() {
+        assert!(
+            rw(Condition::Log("(unclosed".into()), None)
                 .validate("tab")
                 .is_err()
         );

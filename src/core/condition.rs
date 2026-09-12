@@ -6,4 +6,7 @@ pub enum Condition {
     Delay(String),
     Port(u16),
     Http(String),
+    File(String),
+    Exit(i32),
+    Log(String),
 }
