@@ -1,7 +1,7 @@
 use crate::core::condition::Condition;
 use std::{
     fs,
-    net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpListener, TcpStream},
+    net::{Ipv4Addr, SocketAddr, SocketAddrV4, TcpStream},
     path::Path,
     time::{Duration, Instant},
 };
@@ -70,6 +70,7 @@ fn check_once(condition: &Condition, exit_file: &Path, log_file: &Path) -> bool 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::TcpListener;
     use tempfile::tempdir;
 
     #[test]

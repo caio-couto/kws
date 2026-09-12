@@ -34,6 +34,7 @@ pub struct Config {
 }
 
 impl Config {
+    #[cfg(test)]
     pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self, KwsError> {
         let mut config = Self::parse_from_file(path)?;
 

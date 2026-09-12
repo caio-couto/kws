@@ -3,6 +3,8 @@ use serde::{Deserialize, Deserializer, de::Error};
 #[derive(Debug, Clone)]
 pub enum Weight {
     Percent(u8),
+    // Lido só quando o driver passar a aplicar proporções nos splits do Konsole.
+    #[allow(dead_code)]
     Factor(f64),
 }
 

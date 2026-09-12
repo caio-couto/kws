@@ -127,7 +127,7 @@ fn leaf_view_ids(trees: &[String]) -> Result<Vec<i32>, KwsError> {
         .flat_map(|tree| {
             let stripped = splitter_id.replace_all(tree, "");
             bare_id
-                .find_iter(&stripped.into_owned())
+                .find_iter(&stripped)
                 .map(|m| m.as_str().to_string())
                 .collect::<Vec<_>>()
         })
