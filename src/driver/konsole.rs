@@ -9,6 +9,7 @@ use dbus::blocking::Connection;
 use std::{
     collections::HashMap,
     process::Command,
+    sync::Mutex,
     time::{Duration, Instant},
 };
 
@@ -16,12 +17,27 @@ const CALL_TIMEOUT: Duration = Duration::from_secs(5);
 const OPEN_WINDOW_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_WINDOW_PROBE: i32 = 32;
 
-pub struct KonsoleDriver;
+pub struct KonsoleDriver {
+    pub attach: bool,
+}
 
 impl driver::Driver for KonsoleDriver {
     fn open_window(&self, _workspace_name: &str) -> Result<Box<dyn driver::Window>, KwsError> {
         let conn = Connection::new_session()
             .map_err(|e| KwsError::Driver(format!("falha ao conectar no DBus: {e}")))?;
+
+        if self.attach
+            && let Some((service, n)) = most_recent_window(&conn)
+        {
+            return Ok(Box::new(KonsoleWindow {
+                service,
+                window_path: format!("/Windows/{n}"),
+                // Janela já existente e potencialmente cheia de abas do
+                // usuário: não mexemos na aba inicial, cada tab configurada
+                // ganha uma sessão nova mesmo.
+                initial: Mutex::new(None),
+            }));
+        }
 
         // Konsole roda em modo single-instance: nossa nova invocação pode ser
         // absorvida por QUALQUER processo já rodando, não necessariamente o
@@ -43,9 +59,23 @@ impl driver::Driver for KonsoleDriver {
                     .find(|n| before_windows.is_none_or(|b| !b.contains(n)));
 
                 if let Some(n) = new_window {
+                    let window_path = format!("/Windows/{n}");
+                    let proxy = conn.with_proxy(&service, &window_path, CALL_TIMEOUT);
+
+                    // Konsole sempre cria sua própria aba padrão ao abrir uma
+                    // janela do zero. Guardamos essa sessão pra a primeira aba
+                    // configurada reaproveitá-la em vez de criar mais uma.
+                    let initial = match (session_list(&proxy), view_hierarchy(&proxy)) {
+                        (Ok(sessions), Ok(views)) if sessions.len() == 1 && views.len() == 1 => {
+                            Some((sessions[0], views[0]))
+                        }
+                        _ => None,
+                    };
+
                     return Ok(Box::new(KonsoleWindow {
                         service,
-                        window_path: format!("/Windows/{n}"),
+                        window_path,
+                        initial: Mutex::new(initial),
                     }));
                 }
             }
@@ -74,6 +104,23 @@ fn list_konsole_services(conn: &Connection) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+// Escolhe uma janela existente pra anexar (--attach): entre todas as
+// instâncias do Konsole rodando, prefere a de PID mais alto (a mais recente),
+// e dentro dela a primeira janela viva.
+fn most_recent_window(conn: &Connection) -> Option<(String, i32)> {
+    list_konsole_services(conn)
+        .into_iter()
+        .filter_map(|service| {
+            let pid: u32 = service.strip_prefix("org.kde.konsole-")?.parse().ok()?;
+            Some((pid, service))
+        })
+        .max_by_key(|(pid, _)| *pid)
+        .and_then(|(_, service)| {
+            let window = list_window_numbers(conn, &service).into_iter().next()?;
+            Some((service, window))
+        })
 }
 
 fn snapshot_windows(conn: &Connection) -> HashMap<String, Vec<i32>> {
@@ -151,10 +198,20 @@ fn view_hierarchy(
 struct KonsoleWindow {
     service: String,
     window_path: String,
+    initial: Mutex<Option<(i32, i32)>>,
 }
 
 impl driver::Window for KonsoleWindow {
     fn open_tab(&self, _title: &str) -> Result<Box<dyn driver::Tab>, KwsError> {
+        if let Some((session_id, view_id)) = self.initial.lock().unwrap().take() {
+            return Ok(Box::new(KonsoleTab {
+                service: self.service.clone(),
+                window_path: self.window_path.clone(),
+                session_id,
+                view_id,
+            }));
+        }
+
         let conn = Connection::new_session()
             .map_err(|e| KwsError::Driver(format!("falha ao conectar no DBus: {e}")))?;
         let proxy = conn.with_proxy(&self.service, &self.window_path, CALL_TIMEOUT);

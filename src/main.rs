@@ -30,7 +30,11 @@ fn main() {
         process::exit(1);
     }
 
-    match exec::run(&config, &KonsoleDriver) {
+    let driver = KonsoleDriver {
+        attach: args.attach,
+    };
+
+    match exec::run(&config, &driver) {
         Ok(summary) => {
             for pane in &summary.ran {
                 println!("✓ {pane}");

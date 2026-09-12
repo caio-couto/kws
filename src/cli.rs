@@ -4,51 +4,61 @@ pub const USAGE: &str = "\
 kws: abre um workspace de terminal a partir de um arquivo de configuração
 
 Uso:
-    kws <nome> [dir]
+    kws <nome> [dir] [--attach]
 
 Argumentos:
     <nome>    nome do workspace, resolvido em ~/.config/kws/<nome>.toml
     [dir]     sobrescreve a 'base' do workspace ('.' usa o diretório atual)
+    --attach  abre as abas numa janela do Konsole já existente, em vez de
+              criar uma janela nova
 
 Exemplos:
     kws financeiro
     kws financeiro .
     kws financeiro ~/proj/financeiro
+    kws financeiro --attach
 ";
 
 #[derive(Debug)]
 pub struct Args {
     pub config_path: PathBuf,
     pub base_override: Option<PathBuf>,
+    pub attach: bool,
 }
 
 pub fn parse(args: &[String]) -> Result<Args, String> {
-    if args.is_empty() || args.iter().any(|a| a == "--help" || a == "-h") {
+    let attach = args.iter().any(|a| a == "--attach");
+    let positional: Vec<&String> = args.iter().filter(|a| a.as_str() != "--attach").collect();
+
+    if positional.is_empty() || positional.iter().any(|a| a.as_str() == "--help" || a.as_str() == "-h") {
         return Err(USAGE.to_string());
     }
 
-    if args.len() > 2 {
+    if positional.len() > 2 {
         return Err(USAGE.to_string());
     }
 
-    let name = &args[0];
+    let name = positional[0];
     let config_path = home_dir()
         .ok_or_else(|| "não foi possível determinar o diretório HOME".to_string())?
         .join(".config")
         .join("kws")
         .join(format!("{name}.toml"));
 
-    let base_override = match args.get(1) {
+    let base_override = match positional.get(1) {
         None => None,
-        Some(dir) if dir == "." => Some(std::env::current_dir().map_err(|e| format!("erro: {e}"))?),
+        Some(dir) if dir.as_str() == "." => {
+            Some(std::env::current_dir().map_err(|e| format!("erro: {e}"))?)
+        }
         Some(dir) => Some(crate::core::workspace::Workspace::expand_tilde(
-            std::path::Path::new(dir),
+            std::path::Path::new(dir.as_str()),
         )),
     };
 
     Ok(Args {
         config_path,
         base_override,
+        attach,
     })
 }
 
@@ -94,6 +104,34 @@ mod tests {
     fn name_with_explicit_dir_sets_base_override() {
         let args = parse(&["financeiro".to_string(), "/tmp".to_string()]).unwrap();
 
+        assert_eq!(args.base_override, Some(PathBuf::from("/tmp")));
+    }
+
+    #[test]
+    fn attach_flag_sets_attach_true() {
+        let args = parse(&["financeiro".to_string(), "--attach".to_string()]).unwrap();
+
+        assert!(args.attach);
+        assert!(args.base_override.is_none());
+    }
+
+    #[test]
+    fn without_attach_flag_defaults_to_false() {
+        let args = parse(&["financeiro".to_string()]).unwrap();
+
+        assert!(!args.attach);
+    }
+
+    #[test]
+    fn attach_flag_works_alongside_dir_override() {
+        let args = parse(&[
+            "financeiro".to_string(),
+            "/tmp".to_string(),
+            "--attach".to_string(),
+        ])
+        .unwrap();
+
+        assert!(args.attach);
         assert_eq!(args.base_override, Some(PathBuf::from("/tmp")));
     }
 
