@@ -10,3 +10,7 @@ serde = {
 }
 toml = "1.1.2"
 regex = "1"
+ureq = "2"
+
+[dev-dependencies]
+tempfile = "3"
