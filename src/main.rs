@@ -2,6 +2,7 @@ use std::process;
 
 mod core;
 mod error;
+mod exec;
 
 use crate::core::Config;
 

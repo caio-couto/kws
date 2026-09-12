@@ -75,26 +75,7 @@ impl Config {
     }
 
     fn validate_depends_on(&self) -> Result<(), KwsError> {
-        let all_areas: Vec<String> = self
-            .tabs
-            .iter()
-            .flat_map(|t| t.panes.iter().filter_map(|p| p.area.clone()))
-            .collect();
-
-        for tab in &self.tabs {
-            for pane in &tab.panes {
-                if let Some(deps) = &pane.depends_on {
-                    for dep in deps {
-                        if !all_areas.contains(dep) {
-                            return Err(KwsError::ValidationError(format!(
-                                "dependência '{dep}' não encontrada. Áreas disponíveis: {all_areas:?}"
-                            )));
-                        }
-                    }
-                }
-            }
-        }
-
+        crate::exec::graph::DependencyGraph::build(self)?;
         Ok(())
     }
 }
