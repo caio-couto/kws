@@ -22,6 +22,8 @@ pub trait Pane: Sync {
     fn run(&self, command: &str) -> Result<(), KwsError>;
 }
 
+pub mod konsole;
+
 #[cfg(test)]
 pub mod local;
 
