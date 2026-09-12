@@ -161,6 +161,7 @@ pub fn run(config: &Config, driver: &dyn Driver) -> Result<Summary, KwsError> {
                 let wrapped = wrapper::wrap_command(&wrapper::WrapSpec {
                     run: run_cmd,
                     env: &config.env,
+                    cwd: &tab.cwd,
                     log_file: &log_file,
                     exit_file: &exit_file,
                     hold: pane.hold,
@@ -234,7 +235,7 @@ mod tests {
     fn tab_with(title: &str, panes: Vec<Pane>) -> Tab {
         Tab {
             title: title.into(),
-            cwd: PathBuf::new(),
+            cwd: PathBuf::from("/tmp"),
             panes,
             splits: HashMap::new(),
         }

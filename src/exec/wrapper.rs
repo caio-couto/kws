@@ -6,6 +6,7 @@ use std::{
 pub struct WrapSpec<'a> {
     pub run: &'a str,
     pub env: &'a HashMap<String, String>,
+    pub cwd: &'a Path,
     pub log_file: &'a Path,
     pub exit_file: &'a Path,
     pub hold: bool,
@@ -18,6 +19,7 @@ pub fn wrap_command(spec: &WrapSpec) -> String {
         .map(|(k, v)| format!("export {k}={};\n", shell_quote(v)))
         .collect();
 
+    let cwd = spec.cwd.display();
     let log_file = spec.log_file.display();
     let exit_file = spec.exit_file.display();
     let run = spec.run;
@@ -29,7 +31,7 @@ pub fn wrap_command(spec: &WrapSpec) -> String {
     };
 
     format!(
-        "clear; {exports}{{ {{ {run}; }} > >(tee \"{log_file}\") 2>&1; }}; ec=$?; echo \"$ec\" > \"{exit_file}\"; {after_exit}"
+        "clear; if cd \"{cwd}\"; then {exports}{{ {{ {run}; }} > >(tee \"{log_file}\") 2>&1; }}; ec=$?; else ec=1; fi; echo \"$ec\" > \"{exit_file}\"; {after_exit}"
     )
 }
 
@@ -67,6 +69,7 @@ mod tests {
         let spec = WrapSpec {
             run: "pnpm start:dev",
             env: &env,
+            cwd: Path::new("/home/caio/proj/backend"),
             log_file: Path::new("/tmp/kws/w/backend/api.log"),
             exit_file: Path::new("/tmp/kws/w/backend/api.exit"),
             hold: false,
@@ -87,6 +90,7 @@ mod tests {
         let spec = WrapSpec {
             run: "pnpm db:migrate",
             env: &env,
+            cwd: Path::new("/home/caio/proj/backend"),
             log_file: Path::new("/tmp/kws/w/backend/migrate.log"),
             exit_file: Path::new("/tmp/kws/w/backend/migrate.exit"),
             hold: true,
@@ -105,6 +109,7 @@ mod tests {
         let spec = WrapSpec {
             run: "true",
             env: &env,
+            cwd: Path::new("/tmp"),
             log_file: Path::new("/tmp/a.log"),
             exit_file: Path::new("/tmp/a.exit"),
             hold: false,
@@ -113,6 +118,23 @@ mod tests {
         let cmd = wrap_command(&spec);
 
         assert!(cmd.contains("export NODE_ENV='development'"));
+    }
+
+    #[test]
+    fn wraps_command_with_cwd() {
+        let env = HashMap::new();
+        let spec = WrapSpec {
+            run: "pnpm dev",
+            env: &env,
+            cwd: Path::new("/home/caio/proj/vello-ai/apps/web"),
+            log_file: Path::new("/tmp/a.log"),
+            exit_file: Path::new("/tmp/a.exit"),
+            hold: false,
+        };
+
+        let cmd = wrap_command(&spec);
+
+        assert!(cmd.contains("if cd \"/home/caio/proj/vello-ai/apps/web\"; then"));
     }
 
     #[test]
